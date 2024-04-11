@@ -1,0 +1,112 @@
+!pip install ortools
+
+from google.colab import files
+
+# file format : FROM, TO, WEIGHT
+uploaded = files.upload()
+
+import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+
+#import io
+#df = pd.read_csv(io.BytesIO(uploaded['eggs.csv']))
+df = pd.read_csv('sample_sp.csv')
+
+display(df)
+
+G = nx.DiGraph()
+
+for ind in df.index:
+    print(df['FROM'][ind], df['TO'][ind],df['WEIGHT'][ind])
+    G.add_edge(df['FROM'][ind], df['TO'][ind],weight=df['WEIGHT'][ind])
+    G.add_edge(df['TO'][ind], df['FROM'][ind],weight=df['WEIGHT'][ind])
+
+print(G.number_of_nodes())
+print(G.number_of_edges())
+
+print(G)
+
+labels = nx.get_edge_attributes(G,'weight')
+#nx.draw_networkx_edge_labels(G,pos=nx.spring_layout(G),edge_labels=labels)
+
+nx.draw(G, with_labels=True, font_weight='bold',pos=nx.spring_layout(G))
+plt.show()
+
+# https://networkx.org/documentation/stable/reference/algorithms/shortest_paths.html
+# G 자체에서 all shortest path 구해준다.
+
+from ortools.linear_solver import pywraplp
+
+DEBUG_PARAM_PRINT = False
+
+def find_start_node(graph, connected_links, end_node):
+  for (i,j) in graph.edges():
+    if j==end_node:
+      if connected_links[i,j].solution_value()>0.5:
+        start_node = i
+
+  return start_node
+
+for start_node in G.nodes():
+
+  if True: #start_node != "x1":
+    print("\n\nFor StartNode:"+start_node)
+    # Create a solver for a shortest path problem
+    solver = pywraplp.Solver.CreateSolver('SCIP')
+
+    # Variables
+    link = {}
+
+    for (i,j) in G.edges():
+      link[i,j] = solver.IntVar(0, G.number_of_nodes(), 'link[%s,%s]' % (i, j))
+
+    distance = {}
+
+    for (i,j) in G.edges():
+      distance[i,j] = G[i][j]["weight"]
+
+    if DEBUG_PARAM_PRINT:
+      print(link)
+      print(distance)
+
+    # Objective function
+    solver.Minimize(solver.Sum(link[i, j] * distance[i,j] for (i,j) in G.edges()))
+
+    # Constraints
+    for k in G.nodes():
+      if k==start_node:
+        solver.Add(solver.Sum(link[i,j] for (i,j) in G.edges() if i==k) == (G.number_of_nodes()-1),"C_SNODE_"+k)
+      else:
+        solver.Add(solver.Sum(link[i,j] for (i,j) in G.edges() if i==k) + 1 == solver.Sum(link[j,i] for (j,i) in G.edges() if i==k),"C_S_"+start_node+"_E_"+k)
+
+    status = solver.Solve()
+
+    print("DONE:"+str(status)+" for start node:"+start_node)
+
+    if status == pywraplp.Solver.OPTIMAL:
+      print("\nSolution:")
+      print(" > Objective value =", solver.Objective().Value())
+
+      for (i,j) in G.edges():
+        if link[i,j].solution_value()>0.5:
+          print(" > link[%s,%s] = %d"%(i,j,link[i,j].solution_value()))
+
+    else:
+      print("The problem does not have an optimal solution.")
+
+    lp = solver.ExportModelAsLpFormat(obfuscated=False)
+
+    if DEBUG_PARAM_PRINT:
+      print(lp)
+
+    for k in G.nodes():
+      if k!=start_node:
+        start_node_for_k = k
+        end_node_for_k = k
+        print("END: "+k)
+        while(start_node_for_k!=start_node):
+          start_node_for_k = find_start_node(G,link,end_node_for_k)
+          print(start_node_for_k+"->"+end_node_for_k)
+          end_node_for_k = start_node_for_k
+
